@@ -40,16 +40,20 @@ final class RegionProviderConfig {
 
     static final long DEFAULT_REFRESH_SECONDS = 60;
 
-    // These mirror the JDK's own JNDI DNS defaults exactly -- see DEFAULT_INIT_TIMEOUT and
-    // DEFAULT_RETRIES in com.sun.jndi.dns.DnsContext. Setting them explicitly to the same values
-    // leaves resolution behaviour identical to not setting them at all, which matters because
-    // Route53RegionProvider shipped without them: a lower retry count here would silently shorten
-    // the DNS timeout for every existing deployment of that provider. The parameters exist so an
-    // operator can *tighten* the bound, not so this library can tighten it on their behalf.
-    // DnsClient retries with a doubling timeout (pktTimeout = timeout * (1 << retry)), so these
+    // These reproduce the JDK's own JNDI DNS defaults -- see DEFAULT_INIT_TIMEOUT and
+    // DEFAULT_RETRIES in com.sun.jndi.dns.DnsContext. Route53RegionProvider shipped without setting
+    // either property, so a lower effective value here would silently shorten the DNS timeout for
+    // every existing deployment of that provider. The parameters exist so an operator can
+    // *tighten* the bound, not so this library can tighten it on their behalf.
+    //
+    // dns.retries counts retries after the initial attempt, whereas the JDK's
+    // com.sun.jndi.dns.timeout.retries counts total attempts (DnsClient sends that many queries per
+    // server, so a value of 0 sends none). dnsEnv() maps one onto the other, which is why the
+    // default here is 3: 1 attempt + 3 retries = the JDK's DEFAULT_RETRIES of 4 attempts.
+    // DnsClient doubles the timeout on each attempt (pktTimeout = timeout * (1 << retry)), so the
     // defaults allow 1s + 2s + 4s + 8s = 15s per server before a lookup is abandoned.
     static final long DEFAULT_DNS_TIMEOUT_MS = 1000;
-    static final int DEFAULT_DNS_RETRIES = 4;
+    static final int DEFAULT_DNS_RETRIES = 3;
 
     private RegionProviderConfig() {
     }
@@ -92,13 +96,26 @@ final class RegionProviderConfig {
      * neither parameter sees the resolution behaviour it saw before these parameters existed. A
      * provider issuing one lookup per DNS indirection multiplies the worst case, so an operator
      * who cares about authentication latency should lower them deliberately.</p>
+     *
+     * @param timeoutMs initial per-query timeout in milliseconds; each retry doubles it.
+     * @param retries   retries after the initial attempt. The JDK property counts total attempts,
+     *                  so it is set to {@code retries + 1}: 0 sends one query, never zero.
      */
     static Hashtable<String, String> dnsEnv(long timeoutMs, int retries) {
         Hashtable<String, String> env = new Hashtable<>();
         env.put(DirContext.INITIAL_CONTEXT_FACTORY, "com.sun.jndi.dns.DnsContextFactory");
         env.put("com.sun.jndi.dns.timeout.initial", Long.toString(timeoutMs));
-        env.put("com.sun.jndi.dns.timeout.retries", Integer.toString(retries));
+        env.put("com.sun.jndi.dns.timeout.retries", Integer.toString(jndiAttempts(retries)));
         return env;
+    }
+
+    /**
+     * Converts a {@code dns.retries} value into the JDK's attempt count, {@code retries + 1}. A
+     * negative value is treated as 0 and the sum saturates at {@link Integer#MAX_VALUE} instead of
+     * overflowing to a negative count.
+     */
+    static int jndiAttempts(int retries) {
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, retries) + 1L);
     }
 
     /**

@@ -19,7 +19,7 @@ public class RegionProviderConfigTest {
      * {@code DEFAULT_RETRIES} in {@code com.sun.jndi.dns.DnsContext}.
      */
     private static final long JDK_DEFAULT_INIT_TIMEOUT_MS = 1000;
-    private static final int JDK_DEFAULT_RETRIES = 4;
+    private static final int JDK_DEFAULT_RETRIES = 4; // total attempts, despite the name
 
     @Test
     public void testDnsDefaultsMatchTheJdkDefaults() {
@@ -31,8 +31,15 @@ public class RegionProviderConfigTest {
         // it in configuration rather than changing these.
         assertEquals(JDK_DEFAULT_INIT_TIMEOUT_MS, RegionProviderConfig.DEFAULT_DNS_TIMEOUT_MS,
                 "Default DNS timeout must equal the JDK's DEFAULT_INIT_TIMEOUT");
-        assertEquals(JDK_DEFAULT_RETRIES, RegionProviderConfig.DEFAULT_DNS_RETRIES,
-                "Default DNS retries must equal the JDK's DEFAULT_RETRIES");
+        // dns.retries counts retries after the first attempt, the JDK counts attempts, so the
+        // default is one lower but must still produce the JDK's attempt count.
+        assertEquals(JDK_DEFAULT_RETRIES, RegionProviderConfig.DEFAULT_DNS_RETRIES + 1,
+                "Default DNS retries plus the initial attempt must equal the JDK's DEFAULT_RETRIES");
+        assertEquals(Integer.toString(JDK_DEFAULT_RETRIES),
+                RegionProviderConfig.dnsEnv(RegionProviderConfig.DEFAULT_DNS_TIMEOUT_MS,
+                        RegionProviderConfig.DEFAULT_DNS_RETRIES)
+                        .get("com.sun.jndi.dns.timeout.retries"),
+                "The default must reach JNDI as the JDK's own attempt count");
     }
 
     @Test
@@ -41,7 +48,19 @@ public class RegionProviderConfigTest {
         assertEquals("com.sun.jndi.dns.DnsContextFactory",
                 env.get("java.naming.factory.initial"));
         assertEquals("1500", env.get("com.sun.jndi.dns.timeout.initial"));
-        assertEquals("3", env.get("com.sun.jndi.dns.timeout.retries"));
+        // 3 retries = 4 attempts, which is what the JDK property counts.
+        assertEquals("4", env.get("com.sun.jndi.dns.timeout.retries"));
+    }
+
+    @Test
+    public void testJndiAttemptsIsRetriesPlusOneAndSaturates() {
+        assertEquals(1, RegionProviderConfig.jndiAttempts(0), "0 retries is one attempt, never zero");
+        assertEquals(2, RegionProviderConfig.jndiAttempts(1));
+        assertEquals(3, RegionProviderConfig.jndiAttempts(2));
+        assertEquals(1, RegionProviderConfig.jndiAttempts(-1));
+        assertEquals(Integer.MAX_VALUE, RegionProviderConfig.jndiAttempts(Integer.MAX_VALUE),
+                "MAX_VALUE + 1 must not overflow to a negative attempt count");
+        assertEquals("1", RegionProviderConfig.dnsEnv(1000, 0).get("com.sun.jndi.dns.timeout.retries"));
     }
 
     @Test

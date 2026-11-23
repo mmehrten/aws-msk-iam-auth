@@ -283,9 +283,9 @@ All three providers read DNS and share these:
 |---|---|---|
 | `refresh.seconds` | `60` | Cache TTL for the resolved region. `0` disables caching. After a failover, requests are signed for the previous region until the entry expires. |
 | `dns.timeout.ms` | `1000` | Initial DNS query timeout. |
-| `dns.retries` | `4` | Query retries, each doubling the timeout. |
+| `dns.retries` | `3` | Retries after the first query, each doubling the timeout. `N` sends up to `N + 1` queries per nameserver; `0` sends one. |
 
-The DNS defaults match the JDK's own, so leaving them unset preserves existing behaviour; together they allow up to 15 seconds per nameserver. Set `dns.timeout.ms=1000;dns.retries=2` for a 3-second bound if you would rather authentication failed fast.
+The DNS defaults match the JDK's own (4 attempts at 1s, 2s, 4s and 8s), so leaving them unset preserves existing behaviour; together they allow up to 15 seconds per nameserver. Set `dns.timeout.ms=1000;dns.retries=1` for a 3-second bound (two attempts), or `dns.retries=0` for a single 1-second attempt, if you would rather authentication failed fast.
 
 If a refresh fails, the last known good region is reused and a warning logged (there is nothing to reuse on the first resolution). Region ids are validated, accepting a known region or one matching a partition's naming pattern. If a provider returns null or throws, the library falls back to the `DefaultAwsRegionProviderChain`.
 
@@ -696,6 +696,9 @@ public static String UriEncode(CharSequence input, boolean encodeSlash) {
 ```
    
 ## Release Notes
+
+### Unreleased
+- `dns.retries` now counts retries after the first query, so `dns.retries=N` sends up to `N + 1` queries. In 2.4.0 the value was passed to the JDK as the total attempt count, so `dns.retries=0` sent no query at all and the provider always failed. The default is now `3`, the same 4 attempts as before. If you set `dns.retries` explicitly, lower it by one to keep the same number of attempts
 
 ### Release 2.4.0
 - Add built-in `CnameRegionProvider` that resolves the region by following a hostname's CNAME chain, for DNS layouts where a stable endpoint name is a Route 53 failover CNAME over per-region names in a customer-owned domain
