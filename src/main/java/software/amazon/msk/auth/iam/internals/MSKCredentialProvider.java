@@ -161,6 +161,16 @@ public class MSKCredentialProvider implements AwsCredentialsProvider, AutoClosea
             AwsCredentialsProvider defaultProvider = getDefaultProvider();
             chain.addCredentialsProvider(defaultProvider);
             ownedProviders.add(defaultProvider);
+            if (providers.stream().anyMatch(p -> p instanceof StsAssumeRoleCredentialsProvider)) {
+                // By default the SDK chain remembers the first provider that succeeds and uses
+                // only that one from then on. With awsRoleArn, one AssumeRole failure (an STS or
+                // DNS outage on the first login, say) would then pin the ambient default identity
+                // for the life of this client, and it would never try the role again. Re-walking
+                // the chain on every resolve costs nothing in steady state, because the
+                // assume-role provider caches its session and refreshes it itself; it only adds
+                // a failed AssumeRole attempt per resolve while the role keeps failing.
+                chain.reuseLastProviderEnabled(false);
+            }
         }
         compositeDelegate = chain.build();
         closeableProviders = ownedProviders.stream()
@@ -408,7 +418,8 @@ public class MSKCredentialProvider implements AwsCredentialsProvider, AutoClosea
                     .orElse(DEFAULT_MAX_BACK_OFF_TIME_MS);
         }
 
-        private StsClientBuilder getStsClientBuilder(Region stsRegion, Boolean shouldUseFips) {
+        // Visible for testing
+        StsClientBuilder getStsClientBuilder(Region stsRegion, Boolean shouldUseFips) {
             if (stsRegion == Region.AWS_GLOBAL && isDualstackEnabled()) {
                 // The STS endpoint ruleset resolves aws-global + dualstack to
                 // sts.aws-global.api.aws, which does not exist in DNS. Fail fast

@@ -180,6 +180,15 @@ sasl.jaas.config=software.amazon.msk.auth.iam.IAMLoginModule required \
   awsAddDefaultProviders="false";
 ```
 
+How the fallback behaves when `awsRoleArn` is set and `awsAddDefaultProviders` is left at `true`:
+
+- Every login, reconnect and re-authentication tries the role first. A login that falls back to the default chain (because STS is unreachable during a DNS outage, say) signs as that default identity, which is usually a different IAM principal. The broker then typically rejects it with an authorization error. Once the role succeeds again, the next login uses the role. Previously, the client kept the default identity for the rest of its life after one such fallback.
+- In steady state this costs nothing extra. The role's session is cached and refreshed in the background before it expires, so a login does not call STS.
+- While the role keeps failing, each login makes a failed AssumeRole attempt before it falls back. The SDK retries an unreachable STS endpoint (4 attempts, several hundred milliseconds), but does not retry an `AccessDenied` (1 attempt). Each fallback is logged at WARN. If your role can never be assumed and you rely on the default identity, remove `awsRoleArn` instead.
+- If STS is unreachable when a cached role session expires, logins during the outage also fall back to the default identity; previously they failed.
+
+If you need a client to authenticate only as the configured role, and to fail rather than sign as any other identity, set `awsAddDefaultProviders="false"`. With it, logins fail while the role cannot be assumed, are retried as described in the next section, and succeed as the role once STS is reachable again.
+
 ### Retries while getting credentials
 In some scenarios the IAM credentials might be transiently unavailable. This will cause the connection to fail, which
 might in some cases cause the client application to stop. 
@@ -699,6 +708,7 @@ public static String UriEncode(CharSequence input, boolean encodeSlash) {
 
 ### Unreleased
 - `dns.retries` now counts retries after the first query, so `dns.retries=N` sends up to `N + 1` queries. In 2.4.0 the value was passed to the JDK as the total attempt count, so `dns.retries=0` sent no query at all and the provider always failed. The default is now `3`, the same 4 attempts as before. If you set `dns.retries` explicitly, lower it by one to keep the same number of attempts
+- With `awsRoleArn` set and the default providers enabled, a login that falls back to the default credential chain no longer pins that default identity for the life of the client. Every login tries the role first again, so a client whose first login hit an STS or DNS outage returns to the role once STS is reachable again. Steady-state logins make no extra STS calls. See [Figuring out whether or not to use default credentials](#figuring-out-whether-or-not-to-use-default-credentials) for what a permanently failing role now costs per login, and for `awsAddDefaultProviders="false"` as the strict option
 
 ### Release 2.4.0
 - Add built-in `CnameRegionProvider` that resolves the region by following a hostname's CNAME chain, for DNS layouts where a stable endpoint name is a Route 53 failover CNAME over per-region names in a customer-owned domain
